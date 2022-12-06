@@ -131,7 +131,7 @@ class Correction_data(nn.Module):
             windows[index] = A.iloc[window[0]:window[1]]['index'].to_list()
 
         for index, section in enumerate(windows):
-            section = self.CrossTab.iloc[section]
+            section = self.CrossTab.iloc[self.METADATA['train_idx']].iloc[section]
             resampled_data = make_resampled_dataset(CrossTab = section, n_batches = self.n_batches, 
                                                     minibatch_size = self.minibatch_size)
             resampled_loader = torch.utils.data.DataLoader(resampled_data, shuffle = True, batch_size = megabatch_size)
@@ -298,7 +298,7 @@ class Correction_data(nn.Module):
                 for _, _, y, mask in self.loader:
                     y, z = self.compute_correction(y, mask)
                     data_corrected.append(y-z)
-
+                
                 # for _, _, y, mask in self.trainloader:
                 #     y, z = self.compute_correction(y, mask)
                 #     train_data_corrected.append(y-z)
@@ -317,6 +317,11 @@ class Correction_data(nn.Module):
                 # abs_train_all.append(abs_effect_train)
                 data_corrected = data_corrected.cpu().detach().numpy()
                 data_corrected = pd.DataFrame(data_corrected)
+                data_corrected.index = self.CrossTab.index
+                column_mapping = dict(zip(data_corrected.columns, self.CrossTab.columns))
+                data_corrected = data_corrected.rename(columns = column_mapping)
+                self.corrected_data = data_corrected
+
                 
                 # robust_stop_metric = self.robust_metric()
                 make_report(data_corrected, n_batches = self.n_batches, batch_size = self.batch_size,  
