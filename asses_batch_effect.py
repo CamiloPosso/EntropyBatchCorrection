@@ -132,24 +132,61 @@ def batchless_entropy_estimate(n_batches, batch_size, sample_size = 7000000):
     return float(torch.mean(log_F)), float(torch.std(log_F, unbiased = True))
 
 
-def batchless_entropy_distribuions(n_batches, batch_size, n_div, sample_size = 10000000):
-    div_size = sample_size//n_div
+def batchless_entropy_distribuions(n_batches, batch_size, n_divisions, n_overlap, sample_size = 10000000):  
+    natural_distributions = []
+
+    div_size = sample_size//n_divisions
+    step_size = div_size//n_overlap
+    natural_distributions = []
+    for j in range(n_overlap):
+        natural_distributions = natural_distributions + [(i*div_size + j*step_size, (i + 1)*div_size + j*step_size) for i in range(n_divisions)]
+
     N = batch_size * n_batches
     K = n_batches
-
     p = torch.distributions.FisherSnedecor(df1 = K-1, df2 = N-K)
     F_stat = np.random.f(K-1, N-K, sample_size)
     log_F = p.log_prob(torch.tensor(F_stat))
-    individual_distance = pd.DataFrame({'index' : range(0, len(F_stat)),
-                                    'F_stat' : F_stat,
-                                    'batch_dist' : log_F})
+    F_df = pd.DataFrame({'index' : range(0, len(F_stat)), 'F_stat' : F_stat, 'batch_dist' : log_F})
 
-    C = individual_distance.sort_values(by = 'F_stat', ascending = False)
-    natural_distributions = [C['batch_dist'].to_list()[i*div_size:(1+i)*div_size] for i in range(0, n_div)]
+    A = F_df.sort_values(by = 'F_stat', ascending = False)
+    A = pd.concat([A,A])
+
+    for index, window in enumerate(natural_distributions):
+        natural_distributions[index] = A.iloc[window[0]:window[1]]['batch_dist'].to_list()
+
     for index, dist in enumerate(natural_distributions):
         dist = torch.tensor(dist)
         natural_mean = float(torch.mean(dist))
         natural_std = float(torch.std(dist, unbiased = True))
         natural_distributions[index] = (natural_mean, natural_std)
     return natural_distributions
+
+
+    # div_size = sample_size//n_div
+    # N = batch_size * n_batches
+    # K = n_batches
+
+    # p = torch.distributions.FisherSnedecor(df1 = K-1, df2 = N-K)
+    # F_stat = np.random.f(K-1, N-K, sample_size)
+    # log_F = p.log_prob(torch.tensor(F_stat))
+    # individual_distance = pd.DataFrame({'index' : range(0, len(F_stat)),
+    #                                 'F_stat' : F_stat,
+    #                                 'batch_dist' : log_F})
+
+    # C = individual_distance.sort_values(by = 'F_stat', ascending = False)
+    # natural_distributions = [C['batch_dist'].to_list()[i*div_size:(1+i)*div_size] for i in range(0, n_div)]
+    # for index, dist in enumerate(natural_distributions):
+    #     dist = torch.tensor(dist)
+    #     natural_mean = float(torch.mean(dist))
+    #     natural_std = float(torch.std(dist, unbiased = True))
+    #     natural_distributions[index] = (natural_mean, natural_std)
+    # return natural_distributions
+    
+
+
+
+
+
+
+
 

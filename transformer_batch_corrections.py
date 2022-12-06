@@ -18,7 +18,7 @@ from report_on_correction import make_report, correction_scatter, batch_density_
 
 
 class Correction_data(nn.Module):
-    def __init__(self, CrossTab, depth, reg_factor, n_batches, batch_size, test_size, random_state, window, n_overlap,
+    def __init__(self, CrossTab, depth, reg_factor, n_batches, batch_size, test_size, random_state, n_divisions, n_overlap,
                  minibatch_size = 200, number_bench = 10, train_on_all = False):
       
         super().__init__()
@@ -28,6 +28,8 @@ class Correction_data(nn.Module):
         self.corrected_data = CrossTab
         self.number_bench = number_bench
         self.random_state = random_state
+        self.n_overlap = n_overlap
+        self.n_divisions = n_divisions
         self.finetune_training = False
         
         ## Data embedding
@@ -103,10 +105,18 @@ class Correction_data(nn.Module):
         self.train_n = len(self.resampled_trainloader)
         self.test_n = len(self.resampled_testloader)
 
-    def make_finetune_loaders(self, megabatch_size, n_div):
-        div_size = len(self.loader.dataset)//n_div
+    def make_finetune_loaders(self, megabatch_size):
+        self.batchless_entropy_distributions = []
+        self.finetune_loaders = []  
+        loader = torch.utils.data.DataLoader(self.TRAIN_DATA, shuffle = False, batch_size = megabatch_size)
+        div_size = len(self.TRAIN_DATA)//self.n_divisions
+        step_size = div_size//self.n_overlap
+        windows = []
+        for j in range(self.n_overlap):
+            windows = windows + [(i*div_size + j*step_size, (i + 1)*div_size + j*step_size) for i in range(self.n_divisions)]
+
         tensor_crosstab = []
-        for _, _, y, mask in self.loader:
+        for _, _, y, mask in loader:
             y, z = self.compute_correction(y, mask)
             tensor_crosstab.append(y-z)
 
@@ -114,17 +124,33 @@ class Correction_data(nn.Module):
         F_stat = compute_F_stat(tensor_crosstab, self.n_batches, self.batch_size)
         F_df = pd.DataFrame({'index' : range(0, len(F_stat)), 'F_stat' : F_stat.cpu().detach().numpy()})
 
-        C = F_df.sort_values(by = 'F_stat', ascending = False)
+        A = F_df.sort_values(by = 'F_stat', ascending = False)
+        A = pd.concat([A,A])
 
-        section_loaders = [C['index'].to_list()[i*div_size:(1+i)*div_size] for i in range(0, n_div)]
-        for index, section in enumerate(section_loaders):
+        for index, window in enumerate(windows):
+            windows[index] = A.iloc[window[0]:window[1]]['index'].to_list()
+
+        for index, section in enumerate(windows):
             section = self.CrossTab.iloc[section]
             resampled_data = make_resampled_dataset(CrossTab = section, n_batches = self.n_batches, 
                                                     minibatch_size = self.minibatch_size)
             resampled_loader = torch.utils.data.DataLoader(resampled_data, shuffle = True, batch_size = megabatch_size)
-            section_loaders[index] = resampled_loader
-        self.finetune_loaders = self.finetune_loaders + section_loaders
-        self.batchless_entropy_distributions = self.batchless_entropy_distributions + batchless_entropy_distribuions(self.n_batches, self.batch_size, n_div)
+            self.finetune_loaders = self.finetune_loaders + [resampled_loader]
+        self.batchless_entropy_distributions = batchless_entropy_distribuions(self.n_batches, self.batch_size, self.n_divisions, self.n_overlap)
+
+        # div_size = len(self.loader.dataset)//n_div
+        # tensor_crosstab = []
+        # for _, _, y, mask in self.loader:
+        #     y, z = self.compute_correction(y, mask)
+        #     tensor_crosstab.append(y-z)
+
+        # tensor_crosstab = torch.cat(tensor_crosstab)
+        # F_stat = compute_F_stat(tensor_crosstab, self.n_batches, self.batch_size)
+        # F_df = pd.DataFrame({'index' : range(0, len(F_stat)), 'F_stat' : F_stat.cpu().detach().numpy()})
+
+        # C = F_df.sort_values(by = 'F_stat', ascending = False)
+
+        
 
     def make_metrics(self):
         self.robust_loaders = []
@@ -311,9 +337,8 @@ class Correction_data(nn.Module):
                     self.resampled_training(resample_training)
 
                 if finetune_training:
-                    self.finetune_loaders = []
-                    for n_div in self.n_divs:
-                        self.make_finetune_loaders(resample_training, n_div)
+                    self.make_finetune_loaders(resample_training)
+                        
 
                 # if (robust_stop_metric < robust_cutoff):
                 #     train_complete = True
