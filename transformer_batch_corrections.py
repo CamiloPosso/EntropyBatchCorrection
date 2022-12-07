@@ -18,7 +18,7 @@ from report_on_correction import make_report, correction_scatter, batch_density_
 
 
 class Correction_data(nn.Module):
-    def __init__(self, CrossTab, depth, reg_factor, n_batches, batch_size, test_size, random_state, n_divisions, n_overlap,
+    def __init__(self, CrossTab, depth, correction_reg, batch_reg, n_batches, batch_size, test_size, random_state, n_divisions, n_overlap,
                  minibatch_size = 200, number_bench = 10, train_on_all = False):
       
         super().__init__()
@@ -63,7 +63,8 @@ class Correction_data(nn.Module):
         ## Important self variables
         self.minibatch_size = minibatch_size
         self.n_minibatch = math.ceil(len(self.TRAIN_DATA)/minibatch_size)
-        self.reg_factor = reg_factor
+        self.correction_reg = correction_reg
+        self.batch_reg = batch_reg
         self.batch_size = batch_size
         self.n_batches = n_batches
         self.train_n = len(self.TRAIN_DATA)
@@ -204,10 +205,18 @@ class Correction_data(nn.Module):
         return self.general_objective(y, z, -self.batchless_entropy, self.batchless_entropy_std)
         # return gaussian_kl2
 
-    def reg_objective(self, z):
-        reg_dist = self.reg_factor * torch.mean(torch.abs(z)) / self.original_batch_means
+    def reg_objective(self, y, z):
+        view_args = []
+        y_dim = y.dim()
+        for index in range(0, y_dim-1):
+            view_args = view_args + [y.size(index)]
+        view_args = view_args + [self.n_batches, self.batch_size]
+        data_means = torch.mean(torch.mean((y-z).view(*view_args), y_dim).view(-1, self.n_batches), 0)
+        batch_reg = self.batch_reg * torch.sum(abs(data_means))
+
+        correction_reg = self.correction_reg * torch.mean(torch.abs(z)) / self.original_batch_means
         # reg_dist = reg_dist**2
-        return reg_dist
+        return correction_reg + batch_reg
 
     def finetune_objective(self, y, z, index):
         batchless_dist = self.batchless_entropy_distributions[index]
@@ -274,6 +283,7 @@ class Correction_data(nn.Module):
         # abs_test_all = []
         abs_all = []
         training_loss = 0
+        total_reg_loss = 0
 
         for epoch in range(epochs):
             if ((epoch % report_frequency == 0) and not train_complete):
@@ -329,7 +339,8 @@ class Correction_data(nn.Module):
                             prefix = run_name, suffix = "_epoch_" + format(epoch) + "_abs_" + format(round(abs_effect, 5)) + 
                                                         "_train_" + format(round(training_loss, 5)) + "_test_" + format(round(test_loss, 5)))
                 print("Epoch " + format(epoch) + " report : testing loss is " + format(test_loss) + 
-                      " while train loss is " + format(training_loss) + " and absolute effect in testing data is " + format(abs_effect) + "\n")
+                      " while train loss is " + format(training_loss) + " abs effect in test data is " + format(abs_effect) + 
+                      " reg loss in training is " + format(total_reg_loss) + "\n")
 
                 
                 if abs_effect < abs_effect_cutoff:
@@ -361,11 +372,12 @@ class Correction_data(nn.Module):
                             self.optimizer.zero_grad()
                             y, z = self.compute_correction(y, mask)
                             raw_loss += self.finetune_objective(y, z, loader_index)
-                            reg_loss += self.reg_objective(z)
+                            reg_loss += self.reg_objective(y, z)
                         loss = raw_loss + reg_loss
                         loss.backward()
                         self.optimizer.step()
                         training_loss += float(raw_loss)
+                        total_reg_loss += float(reg_loss)
                         # for y, mask in finetune_loader:
                             # self.optimizer.zero_grad()
                             # y, z = self.compute_correction(y, mask)
@@ -379,7 +391,7 @@ class Correction_data(nn.Module):
                         self.optimizer.zero_grad()
                         y, z = self.compute_correction(y, mask)
                         raw_loss = self.objective(y, z)
-                        loss = raw_loss + self.reg_objective(z)
+                        loss = raw_loss + self.reg_objective(y, z)
                         loss.backward()
                         self.optimizer.step()
                         training_loss += float(raw_loss)
@@ -388,7 +400,7 @@ class Correction_data(nn.Module):
                         self.optimizer.zero_grad()
                         y, z = self.compute_correction(y, mask)
                         raw_loss = self.objective(y, z)
-                        loss = raw_loss + self.reg_objective(z)
+                        loss = raw_loss + self.reg_objective(y, z)
                         loss.backward()
                         self.optimizer.step()
                         training_loss += float(raw_loss)
